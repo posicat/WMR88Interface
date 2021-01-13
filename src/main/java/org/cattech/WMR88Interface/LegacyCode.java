@@ -26,6 +26,7 @@ public class LegacyCode {
 	
 	final String[] TREND_DESCRIPTION_OLD = { "Steady", "Rising", "Falling" };
 	final String[] DIRECTION_DESCRIPTION_OLD = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+	final String[] UV_DESCRIPTION = { "Low", "Medium", "High", "Very High", "Extremely High" };
 
 	
 	/**
@@ -45,7 +46,7 @@ public class LegacyCode {
 		int year = 2000 + (Byte.toUnsignedInt(frame[8]) % 100); // get year, limited to
 														// 99
 		int zoneSign = // get time zone sign
-		getSign(Byte.toUnsignedInt(frame[9]) / 128);
+		getSign_OLD(Byte.toUnsignedInt(frame[9]) / 128);
 		int zone = Byte.toUnsignedInt(frame[9]) % 128; // get time zone
 		int radioLevel = (Byte.toUnsignedInt(frame[0]) / 16) % 4; // get radio level
 		String radioDescription = getRadio(radioLevel); // get radio description
@@ -97,7 +98,7 @@ public class LegacyCode {
 	 * @param signCode sign code
 	 * @return sign (+1 or -1)
 	 */
-	protected int getSign(int signCode) {
+	protected int getSign_OLD(int signCode) {
 		return (signCode == 0 ? +1 : -1); // return sign code
 	}
 
@@ -212,12 +213,12 @@ public class LegacyCode {
 	protected void analyseThermohygrometer(byte[] frame) {
 		String batteryDescription = getBatteryOld(Byte.toUnsignedInt(frame[0]) / 64);
 		int sensor = Byte.toUnsignedInt(frame[2]) % 16;
-		int temperatureSign = getSign(Byte.toUnsignedInt(frame[4]) / 16);
+		int temperatureSign = getSign_OLD(Byte.toUnsignedInt(frame[4]) / 16);
 		float temperature = temperatureSign * (256.0f * (Byte.toUnsignedInt(frame[4]) % 16) + Byte.toUnsignedInt(frame[3])) / 10.0f;
 		String temperatureTrend = getTrend((Byte.toUnsignedInt(frame[0]) / 16) % 4);
 		int humidity = Byte.toUnsignedInt(frame[5]) % 100;
 		String humidityTrend = getTrend((Byte.toUnsignedInt(frame[2]) / 16) % 4);
-		int dewpointSign = getSign(Byte.toUnsignedInt(frame[7]) / 16);
+		int dewpointSign = getSign_OLD(Byte.toUnsignedInt(frame[7]) / 16);
 		float dewpoint = dewpointSign * (256.0f * (Byte.toUnsignedInt(frame[7]) % 16) + Byte.toUnsignedInt(frame[6])) / 10.0f;
 		boolean heatValid = (Byte.toUnsignedInt(frame[9]) & 0x20) == 0;
 
@@ -262,7 +263,7 @@ public class LegacyCode {
 		windDirection = Math.round((frame[2] % 16) * 22.5f);
 		int chillSign = Byte.toUnsignedInt(frame[8]) / 16; // get wind chill sign quartet
 		boolean chillValid = (chillSign & 0x2) == 0;// get wind chill validity
-		chillSign = getSign(chillSign / 8); // get wind chill sign
+		chillSign = getSign_OLD(chillSign / 8); // get wind chill sign
 		float windChill = chillSign * // get wind chill (deg C)
 				Byte.toUnsignedInt(frame[7]);
 		String chillDescription = chillValid ? Float.toString(windChill) : "N/A";
@@ -304,6 +305,50 @@ public class LegacyCode {
 	 */
 	String getDirection(int directionCode) {
 		return (directionCode < DIRECTION_DESCRIPTION_OLD.length ? DIRECTION_DESCRIPTION_OLD[directionCode] : "Unknown");
+	}
+
+	/**
+	 * Validate checksum and frame length.
+	 * 
+	 * @param frame sensor data
+	 * @return true if checksum is valid
+	 */
+	protected boolean validFrame(byte[] frame) {
+			int length = frame.length;
+
+			initialise_Old();
+			
+			int frameCheckSum = 0;
+			boolean validFrame = false;
+	
+			if (length >= 2) { // at least a two-byte frame?
+				for (int i = 0; i < length - 2; i++) {
+					frameCheckSum += Byte.toUnsignedInt(frame[i]);
+				}
+	
+				int expectedCheckSum = 256 * Byte.toUnsignedInt(frame[length - 1]) + Byte.toUnsignedInt(frame[length - 2]);
+	//			log.debug("Expected checksum : " + expectedCheckSum + " Actual : " + frameCheckSum);
+	
+				validFrame = (expectedCheckSum == frameCheckSum);
+	
+				if (validFrame) {
+					Byte sensorCode = frame[1];
+	
+					Integer sensorLength = responseLength.get(sensorCode);
+	
+					validFrame = (sensorLength != null && sensorLength.intValue() == length);
+				}
+			} else {
+				log.info("Received short frame, ignoring");
+			}
+	
+			return (validFrame); // return validity check
+		}
+
+	String getUV(int uvCode) {
+		int uvIndex = // get UV description index
+				uvCode >= 11 ? 4 : uvCode >= 8 ? 3 : uvCode >= 6 ? 2 : uvCode >= 3 ? 1 : 0;
+		return (UV_DESCRIPTION[uvIndex]); // return UV description
 	}
 
 }
