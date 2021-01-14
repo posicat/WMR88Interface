@@ -2,6 +2,8 @@ package org.cattech.WMR88Interface;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Calendar;
+import java.util.TimeZone;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -13,26 +15,24 @@ import com.codeminders.hidapi.HIDManager;
 public class WMR88InterfaceThread implements Runnable {
 	Logger log = LogManager.getLogger(WMR88InterfaceThread.class);
 
-	final String[] DIRECTION_DESCRIPTION = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
-	final String[] TREND_DESCRIPTION = { "Steady", "Rising", "Falling" };
-	private final String[] WEATHER_DESCRIPTION = { "Partly Cloudy", "Rainy", "Cloudy", "Sunny", "?", "Snowy" };
+	private final static String[] DIRECTION_DESCRIPTION = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+	private final static String[] WEATHER_DESCRIPTION = { "Partly Cloudy", "Rainy", "Cloudy", "Sunny", "?", "Snowy" };
+	private final static String[] TREND_DESCRIPTION = { "Stable", "Rising", "Falling", "Unknown" };
+	private final static String[] MOOD_FACES = { "", ":-)", ":-(", ":-|" };
 
 	final int CENTURY = 2000;
 
-	private final byte[] STATION_INITIALISATION_WMR200 = { (byte) 0x00, (byte) 0x20, (byte) 0x00, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
-	private final byte[] STATION_REQUEST_WMR200 = { (byte) 0x00, (byte) 0x01, (byte) 0xD0, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
+	private final static byte[] STATION_INITIALISATION_WMR200 = { (byte) 0x00, (byte) 0x20, (byte) 0x00, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
+	private final static byte[] STATION_REQUEST_WMR200 = { (byte) 0x00, (byte) 0x01, (byte) 0xD0, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
-	private final int FRAME_BYTE_DELIMITER = (byte) 0xFF;
+	private final static int FRAME_BYTE_DELIMITER = (byte) 0xFF;
 
-	private final byte CODE_ANEMOMETER = (byte) 0x48;
-	private final byte CODE_BAROMETER = (byte) 0x46;
-	private final byte CODE_CLOCK = (byte) 0x60;
-	private final byte CODE_RAINFALL = (byte) 0x41;
-	private final byte CODE_THERMOHYGROMETER = (byte) 0x42;
-	private final byte CODE_UV = (byte) 0x47;
-	private final int BUFFER_USB_RESP0NSE_BYTES = 40;
-
-	private final int RESPONSE_TIMEOUT_SEC = 10;
+	private final static byte CODE_ANEMOMETER = (byte) 0x48;
+	private final static byte CODE_BAROMETER = (byte) 0x46;
+	private final static byte CODE_CLOCK = (byte) 0x60;
+	private final static byte CODE_RAINFALL = (byte) 0x41;
+	private final static byte CODE_THERMOHYGROMETER = (byte) 0x42;
+	private final static byte CODE_UV = (byte) 0x47;
 
 	// Time from last sensor data or data request before requesting data again
 	// (sec); this should be more than 60 seconds (the normal response interval of a
@@ -49,22 +49,26 @@ public class WMR88InterfaceThread implements Runnable {
 	private HIDDevice hidDevice;
 
 	private long lastDataReceivedMS;
+	private final int RESPONSE_TIMEOUT_SEC = 10;
+
+	private final int STATION_BUFFER_BYTES = 100;
+	private final int BUFFER_USB_RESP0NSE_BYTES = 40;
 
 	private int responseByteCount;
 	private byte[] responseBufferUSB = new byte[BUFFER_USB_RESP0NSE_BYTES];
 
-	private final int STATION_BUFFER_BYTES = 100;
 	private int stationBufferIndexNext;
 	private byte[] stationBuffer = new byte[STATION_BUFFER_BYTES];
 
-	private boolean running;
-	private boolean returnInvalidFrames = true;
-	//TODO Use these variables, add setters
-	private boolean useMetric = true;
-	private String dateFormat = "";
+	Calendar c = Calendar.getInstance();
 	
-
+	private boolean running;
 	private WMR88Callback callback;
+
+	private boolean returnInvalidFrames = false;
+	private boolean useMetric = false;
+	private boolean overrideTimezone = true;
+	//TODO Add option to include units on all values
 
 	/**
 	 * Main thread to open the weather station device, repeatedly read from it, and
@@ -111,8 +115,6 @@ public class WMR88InterfaceThread implements Runnable {
 		JSONObject decoded = new JSONObject();
 		byte sensorCode = frame[1];
 
-		boolean validReceived = true;
-
 		switch (sensorCode) {
 		case CODE_ANEMOMETER:
 			decodeAnemometer(decoded, frame);
@@ -133,7 +135,7 @@ public class WMR88InterfaceThread implements Runnable {
 			decodeUV(decoded, frame);
 			break;
 		default:
-			decoded.put("Error","Received packet for unknown sensor ID : code 0x" + String.format("%02X", sensorCode));
+			decoded.put("Error", "Received packet for unknown sensor ID : code 0x" + String.format("%02X", sensorCode));
 		}
 
 		if (decoded.has("Error")) {
@@ -141,20 +143,20 @@ public class WMR88InterfaceThread implements Runnable {
 			if (returnInvalidFrames) {
 				decoded.put("Type", "InvalidFrame");
 				decoded.put("Frame", bytesToString(frame, false));
-			}else {
+			} else {
 				decoded = new JSONObject();
 			}
-		}else {
+		} else {
 			// Keep track of the last received valid packet, so we can timeout and
 			// re-request from the station.
 			lastDataReceivedMS = System.currentTimeMillis();
 		}
 
 		if (callback != null) {
-			callback.receiveData(decoded.toString(3));
+			callback.receiveData(decoded.toString());
 		}
 
-		generateTestCode(frame, decoded);
+//		generateTestCode(frame, decoded); // Convienience method for adding tests quickly.
 		return decoded;
 
 	}
@@ -179,13 +181,32 @@ public class WMR88InterfaceThread implements Runnable {
 			bitDecode(decoded, frame[0], 6, "Battery", "Good", "Low");
 			bitDecode(decoded, frame[0], 5, "RFSync", "Inactive", "Active");
 			bitDecode(decoded, frame[0], 4, "RFSignal", "Strong", "Weak/Searching"); // TODO Verify this with the display,
-			byteDecode(decoded, frame[4], "Minutes");
-			byteDecode(decoded, frame[5], "Hour");
-			byteDecode(decoded, frame[6], "Day");
-			byteDecode(decoded, frame[7], "Month");
-			byteDecodeDelta(decoded, frame[8], "Year", +2000);
-			byteDecodeSigned(decoded, frame[9], "GMT+-");
+			long clockMillis = dataDecodeClock(decoded, frame, 4,true);
+			
+			long deltaMillis = System.currentTimeMillis() - clockMillis;
+			decoded.put("deltaMilis",deltaMillis);
+			log.info("Computer time and Station time differ by "+ deltaMillis + "ms");
 		}
+	}
+
+	private long dataDecodeClock(JSONObject decoded, byte[] frame, int i,boolean containsTZ) {
+		c.set(frame[i + 4]+CENTURY, frame[i + 3]-1, frame[i + 2], frame[i + 1], frame[i],0);
+		
+		// If we allow the timezone to be overridden by the Station, grab and set it here.
+		// Note the WMR88A does not return the right timezone, so by default this is turned off.
+		if (containsTZ && ! overrideTimezone) {
+			TimeZone tz = TimeZone.getDefault();
+			byte offset = frame[9];
+			tz.setID("UTC +"+offset);
+			tz.setRawOffset(1000*60*60*offset);
+			c.setTimeZone(tz); 
+		}
+		
+		decoded.put("DateTime", c.getTime().toString());
+		long timeInMillis = c.getTimeInMillis()/1000*1000;
+		decoded.put("Timestamp", timeInMillis); // Zero out any milliseconds as the clock doesn't even report seconds.
+		
+		return timeInMillis;
 	}
 
 	private void decodeBarometer(JSONObject decoded, byte[] frame) {
@@ -213,13 +234,11 @@ public class WMR88InterfaceThread implements Runnable {
 	private void decodeThermohygrometer(JSONObject decoded, byte[] frame) {
 		decoded.put("Type", "Thermohygrometer");
 		if (verifyChecksumAndLength(decoded, frame, 12)) {
-			String[] trends = { "Stable", "Rising", "Falling", "Unknown" };
-			String[] moodFaces = { "", ":-)", ":-(", ":-|" };
 
 			bitDecode(decoded, frame[0], 6, "Battery", "Low", "OK");
-			twoBitDecode(decoded, frame[0], 4, "TemperatureTrend", trends);
-			twoBitDecode(decoded, frame[2], 0, "HumidityTrend", trends);
-			twoBitDecode(decoded, frame[2], 0, "Mood", moodFaces);
+			twoBitDecode(decoded, frame[0], 4, "TemperatureTrend", TREND_DESCRIPTION);
+			twoBitDecode(decoded, frame[2], 0, "HumidityTrend", TREND_DESCRIPTION);
+			twoBitDecode(decoded, frame[2], 0, "Mood", MOOD_FACES);
 			lowNibbleDecode(decoded, frame[2], "SensorNumber");
 
 			int temperatureSign = getSign(Byte.toUnsignedInt(frame[4]) / 16);
@@ -238,35 +257,37 @@ public class WMR88InterfaceThread implements Runnable {
 
 	private void decodeWindChillHeatIndex(JSONObject decoded, byte[] frame) {
 		int dewpointSign = getSign(Byte.toUnsignedInt(frame[7]) / 16);
-		float heatIndex = dewpointSign * fahrenheitCelsius((256.0f * (Byte.toUnsignedInt(frame[9]) % 8) + Byte.toUnsignedInt(frame[8])) / 10.0f);
+		
+		float heatIndex = 0;
+		if (useMetric) {
+			heatIndex = dewpointSign * convertFahrenheitToCelsius((256.0f * (Byte.toUnsignedInt(frame[9]) % 8) + Byte.toUnsignedInt(frame[8])) / 10.0f);
+		}else {
+			heatIndex = dewpointSign * (256.0f * (Byte.toUnsignedInt(frame[9]) % 8) + Byte.toUnsignedInt(frame[8])) / 10.0f;
+		}
+
 		boolean heatValid = (Byte.toUnsignedInt(frame[9]) & 0x20) == 0;
 		if (heatValid) {
 			decoded.put("HeatIndex", heatIndex);
 		}
-		// TODO This is supposed to also be windchill? See if you can find more on this
+		// TODO From documentation online this might also be windchill, investigate adding that
 	}
 
 	private void decodeRainfall(JSONObject decoded, byte[] frame) {
 		decoded.put("Type", "Rainfall");
 		if (verifyChecksumAndLength(decoded, frame, 17)) {
-			// TODO There are multiple ways batteries are checked, unify them!
 			highNibbleDecodeBattery(decoded, frame[0], "Battery");
 
 			// units are 1/100th of an inch
-			// TODO add flag to use metric units instead so user can decide
 			wordDecode(decoded, frame, 2, "RainfallRate");
 			wordDecode(decoded, frame, 4, "RainfallHourly");
 			wordDecode(decoded, frame, 6, "RainfallDaily");
 			wordDecode(decoded, frame, 8, "RainfallSinceReset");
+			if (useMetric) {
+				// TODO add code to convert 1/100 of an inch into mm for these values
+				throw(new UnsupportedOperationException("Not yet implemented, sorry!"));
+			}
 
-			int minute = Byte.toUnsignedInt(frame[10]) % 60;
-			int hour = Byte.toUnsignedInt(frame[11]) % 24;
-			int day = Byte.toUnsignedInt(frame[12]) % 32;
-			int month = Byte.toUnsignedInt(frame[13]) % 13;
-			int year = 2000 + (Byte.toUnsignedInt(frame[14]) % 100);
-
-			// TODO Add code to convert this to a timestamp which is much more usable
-			decoded.put("LastReset", String.format("%02d/%02d/%04d", month, day, year) + " " + String.format("%02d:%02d", hour, minute));
+			dataDecodeClock(decoded, frame, 10,false);
 		}
 	}
 
@@ -283,7 +304,6 @@ public class WMR88InterfaceThread implements Runnable {
 			int windDirection = frame[2] % 16;
 			decoded.put("WindVectorDegrees", windDirection * 360 / 16);
 			decoded.put("WindVectorDescription", DIRECTION_DESCRIPTION[windDirection]);
-			final String[] DIRECTION_DESCRIPTION = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
 
 			float windGust = (256.0f * (Byte.toUnsignedInt(frame[5]) % 16) + Byte.toUnsignedInt(frame[4])) / 10.0f;
 			decoded.put("WindGust", String.format("%.1f", windGust));
@@ -352,8 +372,7 @@ public class WMR88InterfaceThread implements Runnable {
 		return (-1);
 	}
 
-	public float fahrenheitCelsius(float fahrenheit) {
-		// TODO add a flag to specify which temperature scale we want.
+	public float convertFahrenheitToCelsius(float fahrenheit) {
 		return (0.5555f * (fahrenheit - 32.0f));
 	}
 
@@ -374,7 +393,13 @@ public class WMR88InterfaceThread implements Runnable {
 	private boolean verifyChecksumAndLength(JSONObject decoded, byte[] frame, int expectedLength) {
 		String error = "";
 		if (frame.length != expectedLength) {
-			error += "Frame length incorrect " + frame.length + " ";
+			if (frame.length > expectedLength) {
+				// Try truncating the frame and see if it processes
+				frame =  Arrays.copyOfRange(frame, 0, expectedLength);
+				decoded.put("Warn","Truncated oversized frame");
+			}else {
+				error += "Frame length incorrect " + frame.length + " ";
+			}
 		}
 
 		if (error.isEmpty()) {
@@ -420,16 +445,8 @@ public class WMR88InterfaceThread implements Runnable {
 		return result;
 	}
 
-	private void byteDecodeSigned(JSONObject decoded, byte b, String key) {
-		decoded.put(key, b);
-	}
-
 	private void byteDecode(JSONObject decoded, int b, String key) {
 		decoded.put(key, b);
-	}
-
-	private void byteDecodeDelta(JSONObject decoded, int b, String key, int delta) {
-		decoded.put(key, b + delta);
 	}
 
 	private void bitDecode(JSONObject flags, byte b, int i, String key, String if0, String if1) {
@@ -482,12 +499,23 @@ public class WMR88InterfaceThread implements Runnable {
 	public boolean isRunning() {
 		return running;
 	}
-	public void setUseMetric(boolean useMetric) {
-		this.useMetric = useMetric;
+
+	public void setTimezone(TimeZone tz) {
+		c.setTimeZone(tz);
+		overrideTimezone=true;
 	}
 
-	public void setDateFormat(String dateFormat) {
-		this.dateFormat = dateFormat;
+	/*
+	 * The timezone coming back from the weather station is not valid for the WMR88A.  It's recommended not to allow it to set the timezone
+	 * for the dates reported, but to rely on the default timezone, or if necessary override the timezone via setTimezone();
+	 */
+	public void setOverrideTimezone(boolean overrideTimezone) {
+		this.overrideTimezone = overrideTimezone;
+	}
+
+	
+	public void setUseMetric(boolean useMetric) {
+		this.useMetric = useMetric;
 	}
 
 	public void setCallback(WMR88Callback callback) {

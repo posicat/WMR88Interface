@@ -81,7 +81,7 @@ public class testFrameDecode {
 	public void testDecode_ValidClockFrame1() throws IOException {
 		WMR88InterfaceThread it = new WMR88InterfaceThread();
 		byte[] frame = {-112,96,3,16,46,18,12,1,21,2,103,1};
-		JSONObject expected = new JSONObject("{\"RFSync\":\"Active\",\"Month\":1,\"Type\":\"Clock\",\"RFSignal\":\"Weak/Searching\",\"Year\":2021,\"Checksum\":\"Valid\",\"Hour\":18,\"Battery\":\"Low\",\"GMT+-\":2,\"Powered\":\"No\",\"Day\":12,\"Minutes\":46}");
+		JSONObject expected = new JSONObject("{\"RFSync\":\"Active\",\"Type\":\"Clock\",\"RFSignal\":\"Weak/Searching\",\"Checksum\":\"Valid\",\"Battery\":\"Low\",\"Powered\":\"No\",\"Timestamp\":1610498760000,\"DateTime\":\"Tue Jan 12 18:46:00 CST 2021\"}");
 		JSONObject actual = it.analyseSensorDataFrame(frame);
 		JSONAssert.assertEquals(expected,actual,matchMode);
 	}
@@ -90,7 +90,7 @@ public class testFrameDecode {
 	public void testDecode_ValidClockFrame2() throws IOException {
 		WMR88InterfaceThread it = new WMR88InterfaceThread();
 		byte[] frame = {-112,96,3,16,52,18,12,1,21,2,109,1};
-		JSONObject expected = new JSONObject("{\"RFSync\":\"Active\",\"Month\":1,\"Type\":\"Clock\",\"RFSignal\":\"Weak/Searching\",\"Year\":2021,\"Checksum\":\"Valid\",\"Hour\":18,\"Battery\":\"Low\",\"GMT+-\":2,\"Powered\":\"No\",\"Day\":12,\"Minutes\":52}");
+		JSONObject expected = new JSONObject("{\"RFSync\":\"Active\",\"Type\":\"Clock\",\"RFSignal\":\"Weak/Searching\",\"Checksum\":\"Valid\",\"Battery\":\"Low\",\"Powered\":\"No\",\"Timestamp\":1610499120000,\"DateTime\":\"Tue Jan 12 18:52:00 CST 2021\"}");
 		JSONObject actual = it.analyseSensorDataFrame(frame);
 		JSONAssert.assertEquals(expected,actual,matchMode);
 	}
@@ -115,8 +115,7 @@ public class testFrameDecode {
 
 	@Test
 	public void testDecode_UV_From3rdPartyData() throws IOException {
-		// TODO I have not tested the results vs an actual UV monitor, as I don't have one.
-
+		// Code found online, test-decoding it here
 		WMR88InterfaceThread it = new WMR88InterfaceThread();
 		byte[] frame = {0x00,0x47,0x01,0x05,0x4D,0x00};
 		JSONObject expected = new JSONObject("{\"Type\":\"UV\",\"UV_Index\":5,\"Checksum\":\"Valid\",\"Battery\":\"OK\"}");
@@ -147,9 +146,10 @@ public class testFrameDecode {
 	@Test
 	public void testDecode_LongerFrame_TryToFix() throws IOException {
 		WMR88InterfaceThread it = new WMR88InterfaceThread();
+		it.setReturnInvalidFrames(true);
 		byte[] frame = {0x00,0x46,(byte) 0xD0,0x13,(byte) 0xD0,0x03,(byte) 0xFC,0x01,(byte) 0xFF,0x00,0x42,(byte) 0x80,(byte) 0xD7,0x00,0x1C,0x1E,0x00,0x00,0x20
 				,(byte) 0xF3,0x01,(byte) 0xFF,(byte) 0x90,0x60,0x03,0x10,0x24,0x16,0x0D,0x01,0x15,0x02,0x62,0x01};
-		JSONObject expected = new JSONObject("{\"Type\":\"InvalidFrame\",\"Frame\":\"00,46,D0,13,D0,03,FC,01,FF,00,42,80,D7,00,1C,1E,00,00,20,F3,01,FF,90,60,03,10,24,16,0D,01,15,02,62,01\",\"Error\":\"Frame length incorrect 34 \"}");
+		JSONObject expected = new JSONObject("{\"Type\":\"Barometer\",\"Checksum\":\"Valid\",\"weatherPrevious\":\"Partly Cloudy\",\"pressureAbsolute\":976,\"pressureRelative\":976,\"weatherForcast\":\"Rainy\",\"Warn\":\"Truncated oversized frame\"}");
 		JSONObject actual = it.analyseSensorDataFrame(frame);
 		JSONAssert.assertEquals(expected,actual,false);
 	}
@@ -172,7 +172,7 @@ public class testFrameDecode {
 		// Code found online, testing it's decode here.
 		WMR88InterfaceThread it = new WMR88InterfaceThread();
 		byte[] frame = {0x00,0x41,0x00,(byte) 0xB0,0x09,0x00,0x00,0x00,(byte) 0xA8,0x00,0x28,0x0C,0x12,0x06,0x0B,(byte) 0xF9,0x01};
-		JSONObject expected = new JSONObject("{\"RainfallRate\":45056,\"Type\":\"Rainfall\",\"RainfallHourly\":9,\"Checksum\":\"Valid\",\"Battery\":\"OK\",\"RainfallDaily\":0,\"RainfallSinceReset\":168,\"LastReset\":\"06/18/2011 12:40\"}");
+		JSONObject expected = new JSONObject("{\"RainfallRate\":45056,\"Type\":\"Rainfall\",\"RainfallHourly\":9,\"Checksum\":\"Valid\",\"Battery\":\"OK\",\"RainfallDaily\":0,\"RainfallSinceReset\":168,\"Timestamp\":1308418800000,\"DateTime\":\"Sat Jun 18 12:40:00 CDT 2011\"}");
 		JSONObject actual = it.analyseSensorDataFrame(frame);
 		JSONAssert.assertEquals(expected,actual,false);
 	}
