@@ -1,9 +1,7 @@
 package org.cattech.WMR88Interface;
 
-import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.core.config.Configurator;
 
 public class CommandLineMonitor {
 	static Logger log = LogManager.getLogger(CommandLineMonitor.class);
@@ -17,7 +15,6 @@ public class CommandLineMonitor {
 
 	public static void main(String[] args) {
 		WMR88InterfaceThread wThread = new WMR88InterfaceThread();
-		Configurator.setRootLevel(Level.DEBUG);
 
 		wThread.setCallback(new InternalCallback());
 		
@@ -34,7 +31,7 @@ public class CommandLineMonitor {
 	}
 	
 	private static void receivedData(String jsonData) {
-		log.info(jsonData);
+		System.out.println(jsonData);
 	}
 	
 
