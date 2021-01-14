@@ -10,7 +10,7 @@ import org.json.JSONObject;
 import com.codeminders.hidapi.HIDDevice;
 import com.codeminders.hidapi.HIDManager;
 
-public class WMR88InterfaceThread extends LegacyCode implements Runnable {
+public class WMR88InterfaceThread implements Runnable {
 	Logger log = LogManager.getLogger(WMR88InterfaceThread.class);
 
 	final String[] DIRECTION_DESCRIPTION = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
@@ -59,6 +59,10 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 
 	private boolean running;
 	private boolean returnInvalidFrames = true;
+	//TODO Use these variables, add setters
+	private boolean useMetric = true;
+	private String dateFormat = "";
+	
 
 	private WMR88Callback callback;
 
@@ -84,10 +88,9 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 				throw (new Exception("could not open weather station device"));
 			} else {
 				while (running) {
-					long actualTime = (System.currentTimeMillis());
-					if (actualTime - lastDataReceivedMS > STATION_TIMEOUT_BEFORE_REREQUEST_SEC * 1000) {
+					if (System.currentTimeMillis() - lastDataReceivedMS > STATION_TIMEOUT_BEFORE_REREQUEST_SEC * 1000) {
 						stationDataRequest();
-						lastDataReceivedMS = actualTime;
+						lastDataReceivedMS = System.currentTimeMillis();
 					}
 					responseByteCount = hidDevice.readTimeout(responseBufferUSB, RESPONSE_TIMEOUT_SEC * 1000);
 					accumulateAndParseStationData(responseByteCount, responseBufferUSB);
@@ -106,15 +109,12 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 
 	public JSONObject analyseSensorDataFrame(byte[] frame) throws IOException {
 		JSONObject decoded = new JSONObject();
-		long actualTime = (System.currentTimeMillis());
 		byte sensorCode = frame[1];
+
+		boolean validReceived = true;
 
 		switch (sensorCode) {
 		case CODE_ANEMOMETER:
-			lastDataReceivedMS = actualTime;
-			if (validFrame(frame)) {
-				analyseAnemometer(frame);
-			}
 			decodeAnemometer(decoded, frame);
 			break;
 		case CODE_BAROMETER:
@@ -124,29 +124,30 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 			decodeClock(decoded, frame);
 			break;
 		case CODE_RAINFALL:
-			lastDataReceivedMS = actualTime;
-			if (validFrame(frame)) {
-				analyseRainfall(frame);
-			}
 			decodeRainfall(decoded, frame);
 			break;
 		case CODE_THERMOHYGROMETER:
-			lastDataReceivedMS = actualTime;
 			decodeThermohygrometer(decoded, frame);
 			break;
 		case CODE_UV:
-			lastDataReceivedMS = actualTime;
 			decodeUV(decoded, frame);
 			break;
 		default:
-			log.info("Ignoring unknown sensor code 0x" + String.format("%02X", sensorCode));
+			decoded.put("Error","Received packet for unknown sensor ID : code 0x" + String.format("%02X", sensorCode));
 		}
+
 		if (decoded.has("Error")) {
 			log.debug("Ignoring invalid frame " + dumpFrameInformation(frame));
 			if (returnInvalidFrames) {
 				decoded.put("Type", "InvalidFrame");
 				decoded.put("Frame", bytesToString(frame, false));
+			}else {
+				decoded = new JSONObject();
 			}
+		}else {
+			// Keep track of the last received valid packet, so we can timeout and
+			// re-request from the station.
+			lastDataReceivedMS = System.currentTimeMillis();
 		}
 
 		if (callback != null) {
@@ -248,15 +249,55 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 	private void decodeRainfall(JSONObject decoded, byte[] frame) {
 		decoded.put("Type", "Rainfall");
 		if (verifyChecksumAndLength(decoded, frame, 17)) {
+			// TODO There are multiple ways batteries are checked, unify them!
+			highNibbleDecodeBattery(decoded, frame[0], "Battery");
+
+			// units are 1/100th of an inch
+			// TODO add flag to use metric units instead so user can decide
+			wordDecode(decoded, frame, 2, "RainfallRate");
+			wordDecode(decoded, frame, 4, "RainfallHourly");
+			wordDecode(decoded, frame, 6, "RainfallDaily");
+			wordDecode(decoded, frame, 8, "RainfallSinceReset");
+
+			int minute = Byte.toUnsignedInt(frame[10]) % 60;
+			int hour = Byte.toUnsignedInt(frame[11]) % 24;
+			int day = Byte.toUnsignedInt(frame[12]) % 32;
+			int month = Byte.toUnsignedInt(frame[13]) % 13;
+			int year = 2000 + (Byte.toUnsignedInt(frame[14]) % 100);
+
+			// TODO Add code to convert this to a timestamp which is much more usable
+			decoded.put("LastReset", String.format("%02d/%02d/%04d", month, day, year) + " " + String.format("%02d:%02d", hour, minute));
 		}
-		// TODO Auto-generated method stub
+	}
+
+	private void wordDecode(JSONObject decoded, byte[] frame, int i, String key) {
+		double word = 256.0 * Byte.toUnsignedInt(frame[i + 1]) + Byte.toUnsignedInt(frame[i]);
+		decoded.put(key, word);
 	}
 
 	private void decodeAnemometer(JSONObject decoded, byte[] frame) {
 		decoded.put("Type", "Anemometer");
 		if (verifyChecksumAndLength(decoded, frame, 11)) {
+			highNibbleDecodeBattery(decoded, frame[0], "Battery");
+
+			int windDirection = frame[2] % 16;
+			decoded.put("WindVectorDegrees", windDirection * 360 / 16);
+			decoded.put("WindVectorDescription", DIRECTION_DESCRIPTION[windDirection]);
+			final String[] DIRECTION_DESCRIPTION = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+
+			float windGust = (256.0f * (Byte.toUnsignedInt(frame[5]) % 16) + Byte.toUnsignedInt(frame[4])) / 10.0f;
+			decoded.put("WindGust", String.format("%.1f", windGust));
+			float windAverage = (16.0f * Byte.toUnsignedInt(frame[6]) + Byte.toUnsignedInt(frame[5]) / 16) / 10.0f;
+			decoded.put("WindAverage", String.format("%.1f", windAverage));
+
+			int chillSign = Byte.toUnsignedInt(frame[8]) / 16; // get wind chill sign nibble
+			boolean doWeHaveWindchill = (chillSign & 0x2) == 0;// get wind chill flag
+			if (doWeHaveWindchill) {
+				chillSign = ((chillSign / 8) == 0) ? +1 : -1; // Nibble determines if windchill is positive or negative.
+				float windChill = chillSign * Byte.toUnsignedInt(frame[7]);
+				decoded.put("WindChill", String.format("%.1f", windChill));
+			}
 		}
-		// TODO Auto-generated method stub
 	}
 
 	private void accumulateAndParseStationData(int bytes, byte[] buffer) throws IOException {
@@ -440,6 +481,13 @@ public class WMR88InterfaceThread extends LegacyCode implements Runnable {
 
 	public boolean isRunning() {
 		return running;
+	}
+	public void setUseMetric(boolean useMetric) {
+		this.useMetric = useMetric;
+	}
+
+	public void setDateFormat(String dateFormat) {
+		this.dateFormat = dateFormat;
 	}
 
 	public void setCallback(WMR88Callback callback) {

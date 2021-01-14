@@ -6,6 +6,7 @@ import java.util.HashMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+@Deprecated
 public class LegacyCode {
 	private Logger log = LogManager.getLogger(LegacyCode.class);
 	/** Radio description (indexed by radio code) */
@@ -269,11 +270,9 @@ public class LegacyCode {
 		String chillDescription = chillValid ? Float.toString(windChill) : "N/A";
 	
 		log.info("Anemometer: " + "Direction " + windDirection + " (" + directionDescription + "), " + "Average " + windAverage + "m/s, " + "Gust " + windGust + "m/s, " + "Chill " + chillDescription + ", " + "Battery " + batteryDescription);
-	
-		calculateWindChill(windGust, chillValid);
 	}
 
-	private void calculateWindChill(float windGust, boolean chillValid) {
+	protected void calculateWindChill(float windGust, boolean chillValid) {
 		// TODO Make this happen
 	}
 
