@@ -1,8 +1,9 @@
 package org.cattech.WMR88Interface;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.List;
 import java.util.TimeZone;
 
 import org.apache.logging.log4j.LogManager;
@@ -27,13 +28,6 @@ public class WMR88InterfaceThread implements Runnable {
 
 	private final static int FRAME_BYTE_DELIMITER = (byte) 0xFF;
 
-	private final static byte CODE_ANEMOMETER = (byte) 0x48;
-	private final static byte CODE_BAROMETER = (byte) 0x46;
-	private final static byte CODE_CLOCK = (byte) 0x60;
-	private final static byte CODE_RAINFALL = (byte) 0x41;
-	private final static byte CODE_THERMOHYGROMETER = (byte) 0x42;
-	private final static byte CODE_UV = (byte) 0x47;
-
 	// Time from last sensor data or data request before requesting data again
 	// (sec); this should be more than 60 seconds (the normal response interval of a
 	// WMR100)
@@ -51,24 +45,22 @@ public class WMR88InterfaceThread implements Runnable {
 	private long lastDataReceivedMS;
 	private final int RESPONSE_TIMEOUT_SEC = 10;
 
-	private final int STATION_BUFFER_BYTES = 100;
-	private final int BUFFER_USB_RESP0NSE_BYTES = 40;
+//	private final int STATION_BUFFER_BYTES = 100;
+	private final int BUFFER_USB_RESP0NSE_BYTES = 9;
 
-	private int responseByteCount;
-	private byte[] responseBufferUSB = new byte[BUFFER_USB_RESP0NSE_BYTES];
-
-	private int stationBufferIndexNext;
-	private byte[] stationBuffer = new byte[STATION_BUFFER_BYTES];
+//	private int stationBufferIndexNext;
+//	private byte[] stationBuffer = new byte[STATION_BUFFER_BYTES];
+	private ArrayList<Byte> stationBuffer = new ArrayList<Byte>();
 
 	Calendar c = Calendar.getInstance();
-	
+
 	private boolean running;
 	private WMR88Callback callback;
 
 	private boolean returnInvalidFrames = false;
 	private boolean useMetric = false;
 	private boolean overrideTimezone = true;
-	//TODO Add option to include units on all values
+	// TODO Add option to include units on all values
 
 	/**
 	 * Main thread to open the weather station device, repeatedly read from it, and
@@ -81,7 +73,9 @@ public class WMR88InterfaceThread implements Runnable {
 		log.info("Initializing sensor data");
 
 		lastDataReceivedMS = 0;
-		stationBufferIndexNext = 0;
+		stationBuffer.clear();
+
+		byte[] responseBufferUSB = new byte[BUFFER_USB_RESP0NSE_BYTES];
 
 		try {
 			com.codeminders.hidapi.ClassPathLibraryLoader.loadNativeHIDLibrary();
@@ -96,8 +90,10 @@ public class WMR88InterfaceThread implements Runnable {
 						stationDataRequest();
 						lastDataReceivedMS = System.currentTimeMillis();
 					}
-					responseByteCount = hidDevice.readTimeout(responseBufferUSB, RESPONSE_TIMEOUT_SEC * 1000);
-					accumulateAndParseStationData(responseByteCount, responseBufferUSB);
+
+					int responseByteCount = hidDevice.readTimeout(responseBufferUSB, RESPONSE_TIMEOUT_SEC * 1000);
+					appendDataToStationBuffer(responseByteCount, responseBufferUSB);
+					parseStationData();
 				}
 			}
 
@@ -111,38 +107,39 @@ public class WMR88InterfaceThread implements Runnable {
 		}
 	}
 
-	public JSONObject analyseSensorDataFrame(byte[] frame) throws IOException {
+	public JSONObject analyseSensorDataFrame(ArrayList<Byte> frameBuffer) throws IOException {
 		JSONObject decoded = new JSONObject();
-		byte sensorCode = frame[1];
 
-		switch (sensorCode) {
-		case CODE_ANEMOMETER:
-			decodeAnemometer(decoded, frame);
+		DeviceParameters devParm = DeviceParameters.lookup(frameBuffer.get(1));
+
+		switch (devParm) {
+		case Anemometer:
+			decodeAnemometer(decoded, frameBuffer);
 			break;
-		case CODE_BAROMETER:
-			decodeBarometer(decoded, frame);
+		case Barometer:
+			decodeBarometer(decoded, frameBuffer);
 			break;
-		case CODE_CLOCK:
-			decodeClock(decoded, frame);
+		case Clock:
+			decodeClock(decoded, frameBuffer);
 			break;
-		case CODE_RAINFALL:
-			decodeRainfall(decoded, frame);
+		case Rainfall:
+			decodeRainfall(decoded, frameBuffer);
 			break;
-		case CODE_THERMOHYGROMETER:
-			decodeThermohygrometer(decoded, frame);
+		case Thermohygrometer:
+			decodeThermohygrometer(decoded, frameBuffer);
 			break;
-		case CODE_UV:
-			decodeUV(decoded, frame);
+		case UV:
+			decodeUV(decoded, frameBuffer);
 			break;
-		default:
-			decoded.put("Error", "Received packet for unknown sensor ID : code 0x" + String.format("%02X", sensorCode));
+		case INVALID:
+			decoded.put("Error", "Received packet for unknown sensor ID : code 0x" + String.format("%02X", frameBuffer.get(1)));
 		}
 
 		if (decoded.has("Error")) {
-			log.debug("Ignoring invalid frame " + dumpFrameInformation(frame));
+			log.debug("Ignoring invalid frame " + dumpFrameInformation(frameBuffer));
 			if (returnInvalidFrames) {
 				decoded.put("Type", "InvalidFrame");
-				decoded.put("Frame", bytesToString(frame, false));
+				decoded.put("Frame", bytesToString(frameBuffer, false));
 			} else {
 				decoded = new JSONObject();
 			}
@@ -156,66 +153,68 @@ public class WMR88InterfaceThread implements Runnable {
 			callback.receiveData(decoded.toString());
 		}
 
-//		generateTestCode(frame, decoded); // Convienience method for adding tests quickly.
+		generateTestCode(frameBuffer, decoded); // Convenience method for adding tests quickly.
 		return decoded;
 
 	}
 
-	private void generateTestCode(byte[] frame, JSONObject decoded) {
+	private void generateTestCode(List<Byte> frameBuffer, JSONObject decoded) {
 		// Generate test Conditions
 		System.out.println("@Test\npublic void testDecode_() throws IOException {");
 		System.out.println("	WMR88InterfaceThread it = new WMR88InterfaceThread();");
 		System.out.println("	byte[] frame = {" +
 
-				bytesToString(frame, true) + "};");
+				bytesToString(frameBuffer, true) + "};");
 		System.out.println("	JSONObject expected = new JSONObject(\"" + decoded.toString().replaceAll("[\"]", "\\\\\"") + "\");");
 		System.out.println("	JSONObject actual = it.analyseSensorDataFrame(frame);");
 		System.out.println("	JSONAssert.assertEquals(expected,actual,false);");
 		System.out.println("}");
 	}
 
-	private void decodeClock(JSONObject decoded, byte[] frame) {
+	private void decodeClock(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "Clock");
-		if (verifyChecksumAndLength(decoded, frame, 12)) {
-			bitDecode(decoded, frame[0], 7, "Powered", "Yes", "No");
-			bitDecode(decoded, frame[0], 6, "Battery", "Good", "Low");
-			bitDecode(decoded, frame[0], 5, "RFSync", "Inactive", "Active");
-			bitDecode(decoded, frame[0], 4, "RFSignal", "Strong", "Weak/Searching"); // TODO Verify this with the display,
-			long clockMillis = dataDecodeClock(decoded, frame, 4,true);
-			
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.Clock)) {
+			bitDecode(decoded, frameBuffer.get(0), 7, "Powered", "Yes", "No");
+			bitDecode(decoded, frameBuffer.get(0), 6, "Battery", "Good", "Low");
+			bitDecode(decoded, frameBuffer.get(0), 5, "RFSync", "Inactive", "Active");
+			bitDecode(decoded, frameBuffer.get(0), 4, "RFSignal", "Strong", "Weak/Searching"); // TODO Verify this with the display,
+			long clockMillis = dataDecodeClock(decoded, frameBuffer, 4, true);
+
 			long deltaMillis = System.currentTimeMillis() - clockMillis;
-			decoded.put("deltaMilis",deltaMillis);
-			log.info("Computer time and Station time differ by "+ deltaMillis + "ms");
+			decoded.put("deltaMilis", deltaMillis);
+			log.info("Computer time and Station time differ by " + deltaMillis + "ms");
 		}
 	}
 
-	private long dataDecodeClock(JSONObject decoded, byte[] frame, int i,boolean containsTZ) {
-		c.set(frame[i + 4]+CENTURY, frame[i + 3]-1, frame[i + 2], frame[i + 1], frame[i],0);
-		
-		// If we allow the timezone to be overridden by the Station, grab and set it here.
-		// Note the WMR88A does not return the right timezone, so by default this is turned off.
-		if (containsTZ && ! overrideTimezone) {
+	private long dataDecodeClock(JSONObject decoded, List<Byte> frameBuffer, int i, boolean containsTZ) {
+		c.set(frameBuffer.get(i + 4) + CENTURY, frameBuffer.get(i + 3) - 1, frameBuffer.get(i + 2), frameBuffer.get(i + 1), frameBuffer.get(i), 0);
+
+		// If we allow the timezone to be overridden by the Station, grab and set it
+		// here.
+		// Note the WMR88A does not return the right timezone, so by default this is
+		// turned off.
+		if (containsTZ && !overrideTimezone) {
 			TimeZone tz = TimeZone.getDefault();
-			byte offset = frame[9];
-			tz.setID("UTC +"+offset);
-			tz.setRawOffset(1000*60*60*offset);
-			c.setTimeZone(tz); 
+			byte offset = frameBuffer.get(9);
+			tz.setID("UTC +" + offset);
+			tz.setRawOffset(1000 * 60 * 60 * offset);
+			c.setTimeZone(tz);
 		}
-		
+
 		decoded.put("DateTime", c.getTime().toString());
-		long timeInMillis = c.getTimeInMillis()/1000*1000;
+		long timeInMillis = c.getTimeInMillis() / 1000 * 1000;
 		decoded.put("Timestamp", timeInMillis); // Zero out any milliseconds as the clock doesn't even report seconds.
-		
+
 		return timeInMillis;
 	}
 
-	private void decodeBarometer(JSONObject decoded, byte[] frame) {
+	private void decodeBarometer(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "Barometer");
-		if (verifyChecksumAndLength(decoded, frame, 8)) {
-			decoded.put("pressureAbsolute", 256 * (Byte.toUnsignedInt(frame[3]) % 16) + Byte.toUnsignedInt(frame[2]));
-			decoded.put("pressureRelative", 256 * (Byte.toUnsignedInt(frame[5]) % 16) + Byte.toUnsignedInt(frame[4]));
-			decoded.put("weatherForcast", getWeatherDescription(Byte.toUnsignedInt(frame[3]) / 16));
-			decoded.put("weatherPrevious", getWeatherDescription(Byte.toUnsignedInt(frame[5]) / 16));
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.Barometer)) {
+			decoded.put("pressureAbsolute", 256 * (Byte.toUnsignedInt(frameBuffer.get(3)) % 16) + Byte.toUnsignedInt(frameBuffer.get(2)));
+			decoded.put("pressureRelative", 256 * (Byte.toUnsignedInt(frameBuffer.get(5)) % 16) + Byte.toUnsignedInt(frameBuffer.get(4)));
+			decoded.put("weatherForcast", getWeatherDescription(Byte.toUnsignedInt(frameBuffer.get(3)) / 16));
+			decoded.put("weatherPrevious", getWeatherDescription(Byte.toUnsignedInt(frameBuffer.get(5)) / 16));
 		}
 	}
 
@@ -223,138 +222,147 @@ public class WMR88InterfaceThread implements Runnable {
 		return (weatherCode < WEATHER_DESCRIPTION.length ? WEATHER_DESCRIPTION[weatherCode] : "Unknown");
 	}
 
-	private void decodeUV(JSONObject decoded, byte[] frame) {
+	private void decodeUV(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "UV");
-		if (verifyChecksumAndLength(decoded, frame, 6)) {
-			highNibbleDecodeBattery(decoded, frame[0], "Battery");
-			byteDecode(decoded, frame[3], "UV_Index");
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.UV)) {
+			highNibbleDecodeBattery(decoded, frameBuffer.get(0), "Battery");
+			byteDecode(decoded, frameBuffer.get(3), "UV_Index");
 		}
 	}
 
-	private void decodeThermohygrometer(JSONObject decoded, byte[] frame) {
+	private void decodeThermohygrometer(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "Thermohygrometer");
-		if (verifyChecksumAndLength(decoded, frame, 12)) {
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.Thermohygrometer)) {
 
-			bitDecode(decoded, frame[0], 6, "Battery", "Low", "OK");
-			twoBitDecode(decoded, frame[0], 4, "TemperatureTrend", TREND_DESCRIPTION);
-			twoBitDecode(decoded, frame[2], 0, "HumidityTrend", TREND_DESCRIPTION);
-			twoBitDecode(decoded, frame[2], 0, "Mood", MOOD_FACES);
-			lowNibbleDecode(decoded, frame[2], "SensorNumber");
+			bitDecode(decoded, frameBuffer.get(0), 6, "Battery", "Low", "OK");
+			twoBitDecode(decoded, frameBuffer.get(0), 4, "TemperatureTrend", TREND_DESCRIPTION);
+			twoBitDecode(decoded, frameBuffer.get(2), 0, "HumidityTrend", TREND_DESCRIPTION);
+			twoBitDecode(decoded, frameBuffer.get(2), 0, "Mood", MOOD_FACES);
+			lowNibbleDecode(decoded, frameBuffer.get(2), "SensorNumber");
 
-			int temperatureSign = getSign(Byte.toUnsignedInt(frame[4]) / 16);
-			float temperature = temperatureSign * (256.0f * (Byte.toUnsignedInt(frame[4]) % 16) + Byte.toUnsignedInt(frame[3])) / 10.0f;
+			int temperatureSign = getSign(Byte.toUnsignedInt(frameBuffer.get(4)) / 16);
+			float temperature = temperatureSign * (256.0f * (Byte.toUnsignedInt(frameBuffer.get(4)) % 16) + Byte.toUnsignedInt(frameBuffer.get(3))) / 10.0f;
 			decoded.put("Temperature", String.format("%.1f", temperature));
 
-			int dewpointSign = getSign(Byte.toUnsignedInt(frame[7]) / 16);
-			float dewpoint = dewpointSign * (256.0f * (Byte.toUnsignedInt(frame[7]) % 16) + Byte.toUnsignedInt(frame[6])) / 10.0f;
+			int dewpointSign = getSign(Byte.toUnsignedInt(frameBuffer.get(7)) / 16);
+			float dewpoint = dewpointSign * (256.0f * (Byte.toUnsignedInt(frameBuffer.get(7)) % 16) + Byte.toUnsignedInt(frameBuffer.get(6))) / 10.0f;
 			decoded.put("DewPoint", String.format("%.1f", dewpoint));
 
-			byteDecode(decoded, frame[5], "Humidity");
+			byteDecode(decoded, frameBuffer.get(5), "Humidity");
 
-			decodeWindChillHeatIndex(decoded, frame);
+			decodeWindChillHeatIndex(decoded, frameBuffer);
 		}
 	}
 
-	private void decodeWindChillHeatIndex(JSONObject decoded, byte[] frame) {
-		int dewpointSign = getSign(Byte.toUnsignedInt(frame[7]) / 16);
-		
+	private void decodeWindChillHeatIndex(JSONObject decoded, List<Byte> frameBuffer) {
+		int dewpointSign = getSign(Byte.toUnsignedInt(frameBuffer.get(7)) / 16);
+
 		float heatIndex = 0;
 		if (useMetric) {
-			heatIndex = dewpointSign * convertFahrenheitToCelsius((256.0f * (Byte.toUnsignedInt(frame[9]) % 8) + Byte.toUnsignedInt(frame[8])) / 10.0f);
-		}else {
-			heatIndex = dewpointSign * (256.0f * (Byte.toUnsignedInt(frame[9]) % 8) + Byte.toUnsignedInt(frame[8])) / 10.0f;
+			heatIndex = dewpointSign * convertFahrenheitToCelsius((256.0f * (Byte.toUnsignedInt((byte) (frameBuffer.get(9) % 8)) + Byte.toUnsignedInt(frameBuffer.get(8)) / 10.0f)));
+		} else {
+			heatIndex = dewpointSign * (256.0f * (Byte.toUnsignedInt((byte) (frameBuffer.get(9) % 8))) + Byte.toUnsignedInt((byte) (frameBuffer.get(8) / 10.0f)));
 		}
 
-		boolean heatValid = (Byte.toUnsignedInt(frame[9]) & 0x20) == 0;
+		boolean heatValid = (Byte.toUnsignedInt((byte) (frameBuffer.get(9) & 0x20)) == 0);
 		if (heatValid) {
 			decoded.put("HeatIndex", heatIndex);
 		}
-		// TODO From documentation online this might also be windchill, investigate adding that
+		// TODO From documentation online this might also be windchill, investigate
+		// adding that to this method
 	}
 
-	private void decodeRainfall(JSONObject decoded, byte[] frame) {
+	private void decodeRainfall(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "Rainfall");
-		if (verifyChecksumAndLength(decoded, frame, 17)) {
-			highNibbleDecodeBattery(decoded, frame[0], "Battery");
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.Rainfall)) {
+			highNibbleDecodeBattery(decoded, frameBuffer.get(0), "Battery");
 
 			// units are 1/100th of an inch
-			wordDecode(decoded, frame, 2, "RainfallRate");
-			wordDecode(decoded, frame, 4, "RainfallHourly");
-			wordDecode(decoded, frame, 6, "RainfallDaily");
-			wordDecode(decoded, frame, 8, "RainfallSinceReset");
+			wordDecode(decoded, frameBuffer, 2, "RainfallRate");
+			wordDecode(decoded, frameBuffer, 4, "RainfallHourly");
+			wordDecode(decoded, frameBuffer, 6, "RainfallDaily");
+			wordDecode(decoded, frameBuffer, 8, "RainfallSinceReset");
 			if (useMetric) {
 				// TODO add code to convert 1/100 of an inch into mm for these values
-				throw(new UnsupportedOperationException("Not yet implemented, sorry!"));
+				throw (new UnsupportedOperationException("Not yet implemented, sorry!"));
 			}
 
-			dataDecodeClock(decoded, frame, 10,false);
+			dataDecodeClock(decoded, frameBuffer, 10, false);
 		}
 	}
 
-	private void wordDecode(JSONObject decoded, byte[] frame, int i, String key) {
-		double word = 256.0 * Byte.toUnsignedInt(frame[i + 1]) + Byte.toUnsignedInt(frame[i]);
+	private void wordDecode(JSONObject decoded, List<Byte> frameBuffer, int i, String key) {
+		double word = 256.0 * Byte.toUnsignedInt(frameBuffer.get(i + 1)) + Byte.toUnsignedInt(frameBuffer.get(i));
 		decoded.put(key, word);
 	}
 
-	private void decodeAnemometer(JSONObject decoded, byte[] frame) {
+	private void decodeAnemometer(JSONObject decoded, ArrayList<Byte> frameBuffer) {
 		decoded.put("Type", "Anemometer");
-		if (verifyChecksumAndLength(decoded, frame, 11)) {
-			highNibbleDecodeBattery(decoded, frame[0], "Battery");
+		if (verifyChecksumAndLength(decoded, frameBuffer, DeviceParameters.Anemometer)) {
+			highNibbleDecodeBattery(decoded, frameBuffer.get(0), "Battery");
 
-			int windDirection = frame[2] % 16;
+			int windDirection = frameBuffer.get(2) % 16;
 			decoded.put("WindVectorDegrees", windDirection * 360 / 16);
 			decoded.put("WindVectorDescription", DIRECTION_DESCRIPTION[windDirection]);
 
-			float windGust = (256.0f * (Byte.toUnsignedInt(frame[5]) % 16) + Byte.toUnsignedInt(frame[4])) / 10.0f;
+			float windGust = (256.0f * (Byte.toUnsignedInt(frameBuffer.get(5)) % 16) + Byte.toUnsignedInt(frameBuffer.get(4))) / 10.0f;
 			decoded.put("WindGust", String.format("%.1f", windGust));
-			float windAverage = (16.0f * Byte.toUnsignedInt(frame[6]) + Byte.toUnsignedInt(frame[5]) / 16) / 10.0f;
+			float windAverage = (16.0f * Byte.toUnsignedInt(frameBuffer.get(6)) + Byte.toUnsignedInt(frameBuffer.get(5)) / 16) / 10.0f;
 			decoded.put("WindAverage", String.format("%.1f", windAverage));
 
-			int chillSign = Byte.toUnsignedInt(frame[8]) / 16; // get wind chill sign nibble
+			int chillSign = Byte.toUnsignedInt(frameBuffer.get(8)) / 16; // get wind chill sign nibble
 			boolean doWeHaveWindchill = (chillSign & 0x2) == 0;// get wind chill flag
 			if (doWeHaveWindchill) {
 				chillSign = ((chillSign / 8) == 0) ? +1 : -1; // Nibble determines if windchill is positive or negative.
-				float windChill = chillSign * Byte.toUnsignedInt(frame[7]);
+				float windChill = chillSign * Byte.toUnsignedInt(frameBuffer.get(7));
 				decoded.put("WindChill", String.format("%.1f", windChill));
 			}
 		}
 	}
 
-	private void accumulateAndParseStationData(int bytes, byte[] buffer) throws IOException {
-		int i, j; // buffer positions
+	private void prependDataToStationBuffer(List<Byte> data) {
+		int offset = 0;
+		for (Byte b : data) {
+			stationBuffer.add(offset++,b);
+		}
+	}
+	
+	private void appendDataToStationBuffer(int bytes, byte[] buffer) throws IOException {
 
 		int count = buffer[0]; // First byte is the number of expected bytes in this packet.
 
 		if (bytes > 0 & count > 0) {
-
-			if (count < buffer.length && stationBufferIndexNext + count <= stationBuffer.length) {
-				for (i = 0; i < count; i++) {
-					// go through response bytes, copy USB to station buffer
-					stationBuffer[stationBufferIndexNext++] = buffer[i + 1];
+			if (count < buffer.length) {
+				// go through remaining response bytes and copy USB to station buffer (starting
+				// at 1, the byte after the length)
+				for (int i = 1; i < count + 1; i++) {
+					stationBuffer.add(buffer[i + 1]);
 				}
-				int startDelimiter = getFrameDelimiterPosition(0); // check for frame start
+			}
+		} else {
+			log.error("Length of packet : " + count + ", longer than buffer length " + buffer.length);
+		}
+	}
 
-				if (startDelimiter != -1) {
-					startDelimiter += 2;
-					int finishDelimiter = getFrameDelimiterPosition(startDelimiter);
-					if (finishDelimiter != -1) {
+	private void parseStationData() throws IOException {
+		int startDelimiter = getFrameDelimiterPosition(0);
 
-						if (startDelimiter < finishDelimiter) {
-							byte[] frameBuffer = Arrays.copyOfRange(stationBuffer, startDelimiter, finishDelimiter);
-							analyseSensorDataFrame(frameBuffer);
+		if (startDelimiter != -1) {
+			startDelimiter += 2;
+			int finishDelimiter = getFrameDelimiterPosition(startDelimiter);
+			if (finishDelimiter != -1) {
 
-							i = 0;
-							for (j = finishDelimiter; j < stationBufferIndexNext; j++) {
-								// go through data, copy following data down
-								stationBuffer[i++] = stationBuffer[j];
-							}
-							stationBufferIndexNext = i;
-						} else
-							log.error("Empty frame received");
-					}
-				}
-			} else
-				log.error("Over-long response received - count " + count + ", buffer index " + stationBufferIndexNext); // report error
+				if (startDelimiter < finishDelimiter) {
+
+					// Separate out the current frame, and all data through it's end from
+					// stationBuffer
+					ArrayList<Byte> frameBuffer = (ArrayList<Byte>) stationBuffer.subList(startDelimiter, finishDelimiter);
+					stationBuffer.subList(0, finishDelimiter).clear();
+
+					analyseSensorDataFrame(frameBuffer);
+				} else
+					log.error("Empty frame received");
+			}
 		}
 	}
 
@@ -364,11 +372,13 @@ public class WMR88InterfaceThread implements Runnable {
 	 * @return start position of frame delimiter (-1 if not found)
 	 */
 	private int getFrameDelimiterPosition(int pos) {
-		for (int i = pos; i < stationBufferIndexNext - 2; i++) {
-			if (stationBuffer[i] == FRAME_BYTE_DELIMITER && stationBuffer[i + 1] == FRAME_BYTE_DELIMITER) {
+		for (int i = pos; i < stationBuffer.size() - 2; i++) {
+			// Look for 2 delimiters in a row, when we find them, return the position
+			if (stationBuffer.get(i) == FRAME_BYTE_DELIMITER && stationBuffer.get(i + 1) == FRAME_BYTE_DELIMITER) {
 				return (i);
 			}
 		}
+		// Didn't find any
 		return (-1);
 	}
 
@@ -390,32 +400,39 @@ public class WMR88InterfaceThread implements Runnable {
 		return (hidManager.openById(STATION_VENDOR, STATION_PRODUCT, null));
 	}
 
-	private boolean verifyChecksumAndLength(JSONObject decoded, byte[] frame, int expectedLength) {
+	private boolean verifyChecksumAndLength(JSONObject decoded, ArrayList<Byte> frameBuffer, DeviceParameters dev) {
 		String error = "";
-		if (frame.length != expectedLength) {
-			if (frame.length > expectedLength) {
-				// Try truncating the frame and see if it processes
-				frame =  Arrays.copyOfRange(frame, 0, expectedLength);
-				decoded.put("Warn","Truncated oversized frame");
-			}else {
-				error += "Frame length incorrect " + frame.length + " ";
+		if (frameBuffer.size() != dev.len) {
+			if (frameBuffer.size() > dev.len) {
+				log.error("Truncating oversized frame.  Was : "+frameBuffer.size()+ " expected " + dev.len);
+				// Our frame is too big, try truncating the frame and see if it processes
+
+				// Return extra data to the buffer
+				prependDataToStationBuffer(frameBuffer.subList(dev.len, frameBuffer.size()));
+
+				// Truncate to expected length
+				frameBuffer.subList(dev.len, frameBuffer.size()).clear();
+
+				decoded.put("Warn", "Truncated oversized frame");
+			} else {
+				error += "Frame length incorrect " + frameBuffer.size() + " ";
 			}
 		}
 
 		if (error.isEmpty()) {
 
-			int expected = Byte.toUnsignedInt(frame[expectedLength - 2]) + Byte.toUnsignedInt(frame[expectedLength - 1]) * 256;
+			int expected = Byte.toUnsignedInt(frameBuffer.get(dev.len - 2)) + Byte.toUnsignedInt(frameBuffer.get(dev.len - 1)) * 256;
 
 			int actual = 0;
-			for (int i = 0; i < frame.length - 2; i++) {
-				actual += Byte.toUnsignedInt(frame[i]);
+			for (int i = 0; i < frameBuffer.size() - 2; i++) {
+				actual += Byte.toUnsignedInt(frameBuffer.get(i));
 			}
 
 			if (expected == actual) {
 				decoded.put("Checksum", "Valid");
 			} else {
 				error += "Invalid [E:" + String.format("%04X", expected) + ",A:" + String.format("%04X", actual) + "] ";
-				decoded.put("FrameDump", dumpFrameInformation(frame));
+				decoded.put("FrameDump", dumpFrameInformation(frameBuffer));
 			}
 		}
 		if (!error.isEmpty()) {
@@ -424,15 +441,16 @@ public class WMR88InterfaceThread implements Runnable {
 		return error.isEmpty();
 	}
 
-	private String dumpFrameInformation(byte[] frame) {
-		String frameDump = bytesToString(frame, false);
-		frameDump += "[" + frame.length + " bytes]";
+
+	private String dumpFrameInformation(List<Byte> frameBuffer) {
+		String frameDump = bytesToString(frameBuffer, false);
+		frameDump += "[" + frameBuffer.size() + " bytes]";
 		return frameDump;
 	}
 
-	private String bytesToString(byte[] bs, boolean hexPrefix) {
+	private String bytesToString(List<Byte> frameBuffer, boolean hexPrefix) {
 		String result = "";
-		for (byte b : bs) {
+		for (byte b : frameBuffer) {
 			if (!result.equals("")) {
 				result += ",";
 			}
@@ -464,8 +482,8 @@ public class WMR88InterfaceThread implements Runnable {
 	 */
 	private void stationDataRequest() throws IOException {
 		log.info("Requested weather station data");// output newline
-		responseByteCount = hidDevice.write(STATION_INITIALISATION_WMR200);
-		responseByteCount = hidDevice.write(STATION_REQUEST_WMR200);
+		hidDevice.write(STATION_INITIALISATION_WMR200);
+		hidDevice.write(STATION_REQUEST_WMR200);
 	}
 
 	private void highNibbleDecodeBattery(JSONObject decoded, byte b, String key) {
@@ -502,18 +520,19 @@ public class WMR88InterfaceThread implements Runnable {
 
 	public void setTimezone(TimeZone tz) {
 		c.setTimeZone(tz);
-		overrideTimezone=true;
+		overrideTimezone = true;
 	}
 
 	/*
-	 * The timezone coming back from the weather station is not valid for the WMR88A.  It's recommended not to allow it to set the timezone
-	 * for the dates reported, but to rely on the default timezone, or if necessary override the timezone via setTimezone();
+	 * The timezone coming back from the weather station is not valid for the
+	 * WMR88A. It's recommended not to allow it to set the timezone for the dates
+	 * reported, but to rely on the default timezone, or if necessary override the
+	 * timezone via setTimezone();
 	 */
 	public void setOverrideTimezone(boolean overrideTimezone) {
 		this.overrideTimezone = overrideTimezone;
 	}
 
-	
 	public void setUseMetric(boolean useMetric) {
 		this.useMetric = useMetric;
 	}
@@ -524,5 +543,13 @@ public class WMR88InterfaceThread implements Runnable {
 
 	public void setReturnInvalidFrames(boolean returnInvalidFrames) {
 		this.returnInvalidFrames = returnInvalidFrames;
+	}
+
+	public JSONObject analyseSensorDataFrameForTests(byte[] frame) throws IOException {
+		ArrayList<Byte> frameBuffer = new ArrayList<Byte>();
+		for (byte b : frame) {
+			frameBuffer.add(b);
+		}
+		return analyseSensorDataFrame(frameBuffer);
 	}
 }
