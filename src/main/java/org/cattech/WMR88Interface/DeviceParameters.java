@@ -18,9 +18,9 @@ public enum DeviceParameters {
 				
 	}
 
-	static DeviceParameters lookup(byte b) {
+	static DeviceParameters lookup(int i) {
 		for (DeviceParameters devParm : DeviceParameters.values()) {
-			if (devParm.id == b) {
+			if (devParm.id == i) {
 				return devParm;
 			}
 		}
