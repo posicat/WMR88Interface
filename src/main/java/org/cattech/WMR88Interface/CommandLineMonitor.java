@@ -22,7 +22,7 @@ public class CommandLineMonitor {
 		
 		while(wThread.isRunning()) {
 			try {
-				Thread.sleep(10000);
+				Thread.sleep(100000);
 			} catch (InterruptedException e) {
 				log.error("Main loop interrupted, terminating",e);
 			}
