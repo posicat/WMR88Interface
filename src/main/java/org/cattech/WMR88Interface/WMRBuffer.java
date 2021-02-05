@@ -25,12 +25,17 @@ public class WMRBuffer extends ArrayList<Byte> {
 		}
 	}
 
-	private void debugDumpBuffer(String string, byte[] data) {
-		debugDumpBuffer(string, data);
+	private void debugDumpBuffer(String string, List<Byte> data) {
+		debugDumpBuffer(string, new WMRBuffer(data));
 	}
 
-	private void debugDumpBuffer(String string, List<Byte> data) {
-		System.out.println(string + data.toString());
+	
+	private void debugDumpBuffer(String string, byte[] data) {
+		debugDumpBuffer(string, new WMRBuffer(data));
+	}
+
+	private void debugDumpBuffer(String string, WMRBuffer data) {
+		log.debug(string + data.toString());
 	}
 
 	private void append(List<Byte> subList) {
@@ -51,8 +56,6 @@ public class WMRBuffer extends ArrayList<Byte> {
 				log.error("Length of packet : " + count + ", longer than buffer length " + data.length);
 			}
 		}
-		debugDumpBuffer("Received  :", data);
-		debugDumpBuffer("MainBuffer:", this);
 	}
 
 	public void prepend(List<Byte> data) {
@@ -60,8 +63,6 @@ public class WMRBuffer extends ArrayList<Byte> {
 		for (Byte b : data) {
 			this.add(offset++, b);
 		}
-		debugDumpBuffer("Received  :", data);
-		debugDumpBuffer("MainBuffer:", this);
 	}
 
 	private String implToStringFormats(boolean hexPrefix) {
@@ -89,7 +90,7 @@ public class WMRBuffer extends ArrayList<Byte> {
 	}
 
 	public String toStringAndLength() {
-		return this.toString() + "[" + this.size() + " bytes]";
+		return this.toString() + " [" + this.size() + " bytes]";
 	}
 
 	@Override

@@ -114,7 +114,7 @@ public class testFrameDecode {
 		it.setReturnInvalidFrames(true);
 		byte[] frame = {0x00,0x46,(byte) 0xD0,0x13,(byte) 0xD0,0x03,(byte) 0xFC,0x01,(byte) 0xFF,0x00,0x42,(byte) 0x80,(byte) 0xD7,0x00,0x1C,0x1E,0x00,0x00,0x20
 				,(byte) 0xF3,0x01,(byte) 0xFF,(byte) 0x90,0x60,0x03,0x10,0x24,0x16,0x0D,0x01,0x15,0x02,0x62,0x01};
-		JSONObject expected = new JSONObject("{\"Type\":\"Barometer\",\"weatherPrevious\":\"Partly Cloudy\",\"pressureAbsolute\":976,\"pressureRelative\":976,\"weatherForcast\":\"Rainy\",\"Warn\":\"Truncated oversized frame\"}");
+		JSONObject expected = new JSONObject("{\"Type\":\"Barometer\",\"weatherPrevious\":\"Partly Cloudy\",\"pressureAbsolute\":976,\"pressureRelative\":976,\"weatherForcast\":\"Rainy\"}");
 		JSONObject actual = it.analyseSensorDataFrame(new WMRBuffer(frame));
 		JSONAssert.assertEquals(expected,actual,false);
 	}
@@ -141,4 +141,15 @@ public class testFrameDecode {
 		JSONObject actual = it.analyseSensorDataFrame(new WMRBuffer(frame));
 		JSONAssert.assertEquals(expected,actual,false);
 	}
+
+//	@Test
+//	public void testDecode_ExtraCrap() throws IOException {
+//		// Rain Gauge: Rate 11439.7mm/h, Recent 2.3mm, 24 Hour 0.0mm, From Reset 42.7mm, Reset 12:40 18/06/2011, Battery OK
+//		// Rain Gauge: Rate 45056 1/100"/hr, Recent 9 1/100", 24 Hour 0.0 1/100", From Reset 168 1/100", Reset 12:40 06/18/2011, Battery OK
+//		// Code found online, testing it's decode here.
+//		WMR88InterfaceThread it = new WMR88InterfaceThread();
+//		byte[] frame = {(byte) 0x10,0x60,0x03,0x10,0x2E,0x00,0x04,0x02,0x15,0x02,(byte) 0xCE,0x00};
+//		JSONObject actual = it.analyseSensorDataFrame(new WMRBuffer(frame));
+//		JSONAssert.assertEquals("eh?",actual,false);
+//	}
 }
