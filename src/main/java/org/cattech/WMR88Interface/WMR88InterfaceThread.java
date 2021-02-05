@@ -24,7 +24,7 @@ public class WMR88InterfaceThread implements Runnable {
 	private final static byte[] STATION_INITIALISATION_WMR200 = { (byte) 0x00, (byte) 0x20, (byte) 0x00, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 	private final static byte[] STATION_REQUEST_WMR200 = { (byte) 0x00, (byte) 0x01, (byte) 0xD0, (byte) 0x08, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
-	private final static int FRAME_BYTE_DELIMITER = (byte) 0xFF;
+	private final static int FRAME_BYTE_DELIMITER = 0xFF;
 
 	// Time from last sensor data or data request before requesting data again
 	// (sec); this should be more than 60 seconds (the normal response interval of a
@@ -355,7 +355,7 @@ public class WMR88InterfaceThread implements Runnable {
 	 * @return start position of frame delimiter (-1 if not found)
 	 */
 	private int getFrameDelimiterPosition(int pos) {
-		for (int i = pos; i < stationBuffer.size() - 2; i++) {
+		for (int i = pos; i < stationBuffer.size() - 1; i++) {
 			// Look for 2 delimiters in a row, when we find them, return the position
 			if (stationBuffer.getByte(i) == FRAME_BYTE_DELIMITER && stationBuffer.getByte(i + 1) == FRAME_BYTE_DELIMITER) {
 				return (i);
@@ -384,16 +384,23 @@ public class WMR88InterfaceThread implements Runnable {
 		String error = "";
 		if (frameBuffer.size() != dev.len) {
 			if (frameBuffer.size() > dev.len) {
-				log.error("Truncating oversized frame.  Was : " + frameBuffer.size() + " expected " + dev.len);
+				log.debug("Truncating oversized frame.  Was : " + frameBuffer.size() + " expected " + dev.len);
+				
 				// Our frame is too big, try truncating the frame and see if it processes
 
-				// Return extra data to the buffer
-				stationBuffer.prepend(frameBuffer.subList(dev.len, frameBuffer.size()));
+				// Return extra data to the buffer, sometimes it begins with an FF, 
+				// so remove those and send it back to be processed if it's relevant data
+				int start = dev.len;
+				while (frameBuffer.getByte(start) == FRAME_BYTE_DELIMITER) {
+					start++;
+				}
+				stationBuffer.prepend(frameBuffer.subList(start, frameBuffer.size()));
 
 				// Truncate to expected length
 				frameBuffer.subList(dev.len, frameBuffer.size()).clear();
 
-				decoded.put("Warn", "Truncated oversized frame");
+				// No need to warn, because the checksum will pass or not to say if the packet is invalid	
+				// decoded.put("Warn", "Truncated oversized frame");
 			} else {
 				error += "Frame length incorrect " + frameBuffer.size() + " ";
 			}
